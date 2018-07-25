@@ -1,0 +1,209 @@
+---
+apiVersion: apps/v1beta1
+kind: StatefulSet
+metadata:
+  name: mnist-caffe-worker
+  namespace: default
+spec:
+  serviceName: "mnist-caffe-worker"
+  replicas: 2
+  template:
+    metadata:
+      labels:
+        app: mnist-caffe-worker
+        taskname: mnist-caffe
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: cputype
+                operator: In
+                values:
+                - intel_xeon
+              - key: pooltype
+                operator: In
+                values:
+                - shared
+      containers:
+      - name: mnist-caffe-worker
+        image: 192.168.247.248:8888/library/caffe-platinum8180:1.0.6
+        imagePullPolicy: Always
+        resources:
+          limits:
+            cpu: "4"
+            memory: "4096Mi"
+            
+          requests:
+            cpu: "4"
+            memory: "4096Mi"
+        ports:
+        - containerPort: 22
+          name: ssh-port
+        env:
+        - name: TASK_NAME
+          value: mnist-caffe
+        - name: CLUSTER_SPEC
+          value: "worker|mnist-caffe-worker-0.mnist-caffe-worker:22;mnist-caffe-worker-1.mnist-caffe-worker:22"
+        - name: NAMESPACE
+          value: default
+        - name: RESOURCE_TYPE
+          value: compute
+        - name: RESOURCE_NAME
+          value: worker
+        - name: TRAIN_LOG_DIR
+          value: /var/train/caffe
+        - name: USER_PUBLIC_KEY
+          value: "ssh-rsa AAAAB3...juBEMVx9jECHFwpy0DSivWJFA8zr5AyHUsYtTbsX8Ek2rKE9kj2o5p root@localhost.localdomain"
+        - name: USER_PRIVATE_KEY
+          value: "-----BEGIN RSA PRIVATE KEY-----\nMI....zimO2SGruBBjPg6c9xYkzeFj1j4RGFKI=\n-----END RSA PRIVATE KEY-----\n"
+        volumeMounts:
+        - mountPath: /dev/shm
+          name: shm
+        - name: mnist-caffe-data-1
+          mountPath: /var/train/caffe
+      volumes:
+      - name: shm
+        emptyDir:
+          medium: Memory
+      - name: mnist-caffe-data-1
+        persistentVolumeClaim:
+          claimName: caffe-claim
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mnist-caffe-worker
+  namespace: default
+  labels:
+    app: mnist-caffe-worker
+    taskname: mnist-caffe
+spec:
+  ports:
+  - port: 22
+    name: ssh-port
+  clusterIP: None
+  selector:
+    app: mnist-caffe-worker
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mnist-caffe-session
+  namespace: default
+spec:
+  template:
+    metadata:
+      name: mnist-caffe-session
+      labels:
+        app: mnist-caffe-session
+        taskname: mnist-caffe
+    spec:
+      hostname: mnist-caffe-session-cluster-ip
+      securityContext:
+        runAsUser: 1000
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: cputype
+                operator: In
+                values:
+                - intel_xeon
+              - key: pooltype
+                operator: In
+                values:
+                - shared
+      containers:
+      - name: mnist-caffe-session
+        image: 192.168.247.248:8888/library/caffe-platinum8180:1.0.6
+        imagePullPolicy: Always
+        stdin: true
+        tty: true
+        resources:
+          limits:
+            cpu: "2"
+            memory: "1024Mi"
+          requests:
+            cpu: "2"
+            memory: "1024Mi"
+        ports:
+        - containerPort: 8888
+          name: session-port
+        - containerPort: 22
+          name: ssh-port
+        env:
+        - name: TRAIN_TRIGGER_METHOD
+          # train_trigger can be default or custom
+          value: default
+        - name: NAMESPACE
+          value: default
+        - name: TRAIN_TRIGGER_COMMAND
+          # when train_trigger is custom
+          value: "user defined"
+        - name: TRAIN_WIPE_ENGINE_DATA
+          # 0 or 1
+          value: "0"
+        - name: TRAIN_ENGINE
+          value: caffe
+        - name: TASK_NAME
+          value: mnist-caffe
+        - name: CLUSTER_SPEC
+          value: "worker|mnist-caffe-worker-0.mnist-caffe-worker:22;mnist-caffe-worker-1.mnist-caffe-worker:22"
+        - name: RESOURCE_TYPE
+          value: session
+        - name: TRAIN_LOG_DIR
+          value: /var/train/caffe
+        - name: USER_PUBLIC_KEY
+          value: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQ...UsYtTbsX8Ek2rKE9kj2o5p root@localhost.localdomain"
+        - name: USER_PRIVATE_KEY
+          value: "-----BEGIN RSA PRIVATE KEY-----\nMIIEpQI...O2SGruBBjPg6c9xYkzeFj1j4RGFKI=\n-----END RSA PRIVATE KEY-----\n"
+        - name: JUPYTER_TOKEN
+          value: 62a9bf5409ac5279d7bcc46275116f0863100e57cc3d3b8e
+        volumeMounts:
+        - mountPath: /dev/shm
+          name: shm
+        - name: mnist-caffe-data-1
+          mountPath: /var/train/caffe
+      volumes:
+      - name: shm
+        emptyDir:
+          medium: Memory
+      - name: mnist-caffe-data-1
+        persistentVolumeClaim:
+          claimName: caffe-claim
+      restartPolicy: OnFailure
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mnist-caffe-session
+  namespace: default
+  labels:
+    app: mnist-caffe-session
+    taskname: mnist-caffe
+spec:
+  selector:
+    app: mnist-caffe-session
+  ports:
+  - port: 8888
+    name: session-port
+  type: NodePort
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mnist-caffe-session-cluster-ip
+  namespace: default
+  labels:
+    app: mnist-caffe-session-cluster-ip
+    taskname: mnist-caffe
+spec:
+  ports:
+  - port: 8888
+    name: session-port
+  clusterIP: None
+  selector:
+    app: mnist-caffe-session

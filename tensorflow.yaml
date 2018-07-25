@@ -1,0 +1,431 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mnist-ps
+  namespace: default
+  labels:
+    app: mnist-ps
+    taskname: mnist
+spec:
+  ports:
+  - port: 2222
+    name: tfport
+  clusterIP: None
+  selector:
+    app: mnist-ps
+---
+apiVersion: apps/v1beta1
+kind: StatefulSet
+metadata:
+  name: mnist-ps
+  namespace: default
+spec:
+  serviceName: "mnist-ps"
+  replicas: 2
+  template:
+    metadata:
+      labels:
+        app: mnist-ps
+        taskname: mnist
+    spec:
+      securityContext:
+        runAsUser: 1000
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: cputype
+                operator: In
+                values:
+                - intel_xeon
+              - key: pooltype
+                operator: In
+                values:
+                - shared              
+      containers:
+      - name: mnist-ps
+        image: 192.168.247.248:8888/library/tensorflow-cpu-modelserving:1.4.0
+        imagePullPolicy: Always
+        resources:
+          limits:
+            cpu: "2"
+            memory: "4096Mi"            
+          requests:
+            cpu: "2"
+            memory: "4096Mi"
+        ports:
+        - containerPort: 2222
+          name: tfps
+        env:
+        - name: CLUSTER_SPEC
+          value: "ps|mnist-ps-0.mnist-ps:2222;mnist-ps-1.mnist-ps:2222,worker|mnist-worker-0.mnist-worker:2222;mnist-worker-1.mnist-worker:2222"
+        - name: RESOURCE_TYPE
+          value: compute
+        - name: RESOURCE_NAME
+          value: ps
+        - name: TRAIN_LOG_DIR
+          value: /var/train/tensorflow/log        
+        volumeMounts:
+        - name: mnist-data-1
+          mountPath: /var/train/tensorflow        
+      volumes:
+        - name: mnist-data-1
+          persistentVolumeClaim:
+            claimName: tfvolume2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mnist-worker
+  namespace: default
+  labels:
+    app: mnist-worker
+    taskname: mnist
+spec:
+  ports:
+  - port: 2222
+    name: tfport
+  clusterIP: None
+  selector:
+    app: mnist-worker
+---
+apiVersion: apps/v1beta1
+kind: StatefulSet
+metadata:
+  name: mnist-worker
+  namespace: default
+spec:
+  serviceName: "mnist-worker"
+  replicas: 2
+  template:
+    metadata:
+      labels:
+        app: mnist-worker
+        taskname: mnist
+    spec:
+      securityContext:
+        runAsUser: 1000
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: cputype
+                operator: In
+                values:
+                - intel_xeon
+              - key: pooltype
+                operator: In
+                values:
+                - shared
+      containers:
+      - name: mnist-worker
+        image: 192.168.247.248:8888/library/tensorflow-cpu-modelserving:1.4.0
+        imagePullPolicy: Always
+        resources:
+          limits:
+            cpu: "4"
+            memory: "4096Mi"
+          requests:
+            cpu: "4"
+            memory: "4096Mi"
+        ports:
+        - containerPort: 2222
+          name: tfps
+        env:
+        - name: CLUSTER_SPEC
+          value: "ps|mnist-ps-0.mnist-ps:2222;mnist-ps-1.mnist-ps:2222,worker|mnist-worker-0.mnist-worker:2222;mnist-worker-1.mnist-worker:2222"
+        - name: RESOURCE_TYPE
+          value: compute
+        - name: RESOURCE_NAME
+          value: worker
+        - name: TRAIN_LOG_DIR
+          value: /var/train/tensorflow/log
+        volumeMounts:
+        - name: mnist-data-1
+          mountPath: /var/train/tensorflow
+      volumes:
+        - name: mnist-data-1
+          persistentVolumeClaim:
+            claimName: tfvolume2
+---
+apiVersion: extensions/v1beta1
+kind: ReplicaSet
+metadata:
+  name: mnist-tf-board
+  namespace: default
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: mnist-tf-board
+        taskname: mnist
+    spec:
+      securityContext:
+        runAsUser: 1000
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: cputype
+                operator: In
+                values:
+                - intel_xeon
+              - key: pooltype
+                operator: In
+                values:
+                - shared
+      containers:
+      - name: mnist-tf-board-tfboard
+        image: 192.168.247.248:8888/library/tensorflow-cpu-modelserving:1.4.0
+        imagePullPolicy: Always
+        resources:
+          limits:
+            cpu: "0.5"
+            memory: "256Mi"
+          requests:
+            cpu: "0.5"
+            memory: "256Mi"
+        #securityContext:
+        #  runAsUser: 0
+        ports:
+        - containerPort: 6006
+          protocol: TCP
+        env:
+        - name: RESOURCE_TYPE
+          value: tensorboard
+        - name: TRAIN_LOG_DIR
+          value: /var/train/tensorflow/log
+        - name: TFBOARD_CON_TYPE
+          value: tfboard
+        - name: TASK_NAME
+          value: mnist
+        volumeMounts:
+        - name: mnist-data-1
+          mountPath: /var/train/tensorflow
+      - name: mnist-tf-board-haproxy
+        image: 192.168.247.248:8888/library/tensorflow-cpu-modelserving:1.4.0
+        imagePullPolicy: Always
+        resources:
+          limits:
+            cpu: "0.5"
+            memory: "256Mi"
+          requests:
+            cpu: "0.5"
+            memory: "256Mi"
+        #securityContext:
+        #  runAsUser: 0
+        ports:
+        - containerPort: 2080
+          protocol: TCP
+        env:
+        - name: RESOURCE_TYPE
+          value: tensorboard
+        - name: TRAIN_LOG_DIR
+          value: /var/train/tensorflow/log
+        - name: TFBOARD_CON_TYPE
+          value: haproxy
+        - name: TFBOARD_TOKEN
+          value: 9c3d61c1-bef3-4e3e-b306-8d6d0c2d1965
+        - name: TASK_NAME
+          value: mnist
+      volumes:
+        - name: mnist-data-1
+          persistentVolumeClaim:
+            claimName: tfvolume2
+      #serviceAccount: userroot
+      #serviceAccountName: userroot
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mnist-tf-board
+  namespace: default
+  labels:
+    app: mnist-tf-board
+    taskname: mnist
+spec:
+  #type: LoadBalancer
+  ports:
+  - port: 2080
+    protocol: TCP
+  selector:
+    app: mnist-tf-board
+  type: NodePort
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mnist-session
+  namespace: default
+spec:
+  template:
+    metadata:
+      name: mnist-session
+      labels:
+        app: mnist-session
+        taskname: mnist
+    spec:
+      securityContext:
+        runAsUser: 1000
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: cputype
+                operator: In
+                values:
+                - intel_xeon
+              - key: pooltype
+                operator: In
+                values:
+                - shared
+      containers:
+      - name: mnist-session
+        image: 192.168.247.248:8888/library/tensorflow-cpu-modelserving:1.4.0
+        imagePullPolicy: Always
+        stdin: true
+        tty: true
+        resources:
+          limits:
+            cpu: "0.5"
+            memory: "256Mi"
+          requests:
+            cpu: "0.5"
+            memory: "256Mi"
+        ports:
+        - containerPort: 8888
+          name: session-port
+        env:
+        - name: TRAIN_TRIGGER_METHOD
+          # train_trigger can be default or custom
+          value: default
+        - name: TRAIN_TRIGGER_COMMAND
+          # when train_trigger is custom
+          value: "user defined"
+        - name: TRAIN_WIPE_ENGINE_DATA
+          # 0 or 1
+          value: "0"
+        - name: TRAIN_ENGINE
+          value: tensorflow
+        - name: CLUSTER_SPEC
+          value: "ps|mnist-ps-0.mnist-ps:2222;mnist-ps-1.mnist-ps:2222,worker|mnist-worker-0.mnist-worker:2222;mnist-worker-1.mnist-worker:2222"
+        - name: RESOURCE_TYPE
+          value: session
+        - name: TRAIN_LOG_DIR
+          value: /var/train/tensorflow/log
+        - name: TASK_NAME
+          value: mnist
+        - name: MODEL_BASE_PATH
+          value: /var/train/tensorflow/model
+        - name: JUPYTER_TOKEN
+          value: efde81a8-21d0-4771-af32-012cd4fd28f2
+        volumeMounts:
+        - name: mnist-data-1
+          mountPath: /var/train/tensorflow
+      volumes:
+        - name: mnist-data-1
+          persistentVolumeClaim:
+            claimName: tfvolume2
+      restartPolicy: OnFailure
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mnist-session
+  namespace: default
+  labels:
+    app: mnist-session
+    taskname: mnist
+spec:
+  selector:
+    app: mnist-session
+  ports:
+  - port: 8888
+    name: session-port
+  type: NodePort
+---
+apiVersion: extensions/v1beta1
+kind: ReplicaSet
+metadata:
+  name: mnist-tf-model-server
+  namespace: default
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: mnist-tf-model-server
+        modelname: mnist
+        taskname: mnist
+    spec:
+      securityContext:
+        runAsUser: 1000
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: cputype
+                operator: In
+                values:
+                - intel_xeon
+              - key: pooltype
+                operator: In
+                values:
+                - shared
+      containers:
+      - name: mnist-tf-model-server
+        image: 192.168.247.248:8888/library/tensorflow-cpu-modelserving:1.4.0
+        imagePullPolicy: Always
+        resources:
+          limits:
+            cpu: "0.5"
+            memory: "256Mi"
+          requests:
+            cpu: "0.5"
+            memory: "256Mi"
+        #securityContext:
+        #  runAsUser: 0
+        ports:
+        - containerPort: 9000
+          protocol: TCP
+        env:
+        - name: RESOURCE_TYPE
+          value: model_server
+        - name: TASK_NAME
+          value: mnist
+        - name: MODEL_BASE_PATH
+          value: /var/train/tensorflow/model
+        volumeMounts:
+        - name: tfdata
+          mountPath: /var/train/tensorflow
+      volumes:
+        - name: tfdata
+          persistentVolumeClaim:
+            claimName: tfvolume2
+      #serviceAccount: userroot
+      #serviceAccountName: userroot
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mnist-tf-model-server
+  namespace: default
+  labels:
+    name: mnist-tf-model-server
+    modelname: mnist
+    taskname: mnist
+spec:
+  #type: LoadBalancer
+  ports:
+  - port: 9000
+    protocol: TCP
+  selector:
+    app: mnist-tf-model-server
+  type: NodePort
